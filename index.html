@@ -649,6 +649,14 @@
     letter-spacing: .01em; text-transform: none; color: #ffffff; gap: 12px;
   }
   .site-mark { width: 46px; height: auto; }
+  /* ---------- admin badge bar on profiles, explore search ---------- */
+  .mod-bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; padding: 12px;
+    border: 1px dashed rgba(59, 130, 255, .45); border-radius: 12px; background: rgba(59, 130, 255, .06);
+  }
+  .mod-bar .label { margin-top: 0; }
+  .explore-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .explore-controls .field { min-width: 220px; width: auto; }
 </style>
 </head>
 <body>
@@ -1243,6 +1251,7 @@ function profileMarkup(p, opts) {
             <span class="followers">${fmt(followersOf(p))} followers</span>
           </div>
           ${pv ? '' : `
+            ${adminBadgeBarHTML(p)}
             <div class="report-box" id="report-box" hidden>
               <label class="sr" for="report-reason">Reason</label>
               <select class="field" id="report-reason">
@@ -1255,6 +1264,40 @@ function profileMarkup(p, opts) {
         </div>
       </article>
     </div>`;
+}
+
+// Admin-only: give or remove badges right on a profile. Visitors never see it.
+function adminBadgeBarHTML(p) {
+  if (!can('badges')) return '';
+  const chips = api.listBadges().map((b) => {
+    const on = (p.badges || []).includes(b.id);
+    return `<button type="button" class="chip${on ? ' on' : ''}" style="--c:${esc(b.color)}" data-pbadge-toggle="${esc(b.id)}" data-u="${esc(p.username)}" aria-pressed="${on}">${esc(b.label)}</button>`;
+  }).join('');
+  return `
+    <div class="mod-bar" aria-label="Admin: give or remove badges">
+      <span class="label">Admin · badges</span>
+      <div class="chips">${chips || '<span class="sub-note">No badges yet. Create them in the Badges tab.</span>'}</div>
+    </div>`;
+}
+
+// Gives or removes one badge on a profile. Admins only.
+function toggleProfileBadge(u, id, btn) {
+  if (!allowed('badges')) return;
+  const p = api.getProfile(u);
+  if (!p) return;
+  const had = p.badges.includes(id);
+  p.badges = had ? p.badges.filter((x) => x !== id) : [...p.badges, id];
+  api.saveProfile(p);
+  const b = badgeById(id);
+  const name = b ? b.label : id;
+  api.addLog(had ? `Removed ${name} from @${u}` : `Gave ${name} to @${u}`);
+  if (btn) {
+    btn.classList.toggle('on', !had);
+    btn.setAttribute('aria-pressed', String(!had));
+  }
+  const row = document.querySelector('.p-handle .badges');
+  if (row) row.innerHTML = badgesHTML(p);
+  toast(had ? `Removed ${name}` : `Gave ${name}`);
 }
 
 function applyBanner(el, url) {
@@ -1365,19 +1408,37 @@ function renderDashboard() {
 
 // --- Explore ---
 let exploreSort = 'popular';
+let exploreQuery = '';
+
+const EXPLORE_SORTERS = {
+  popular: (a, b) => (b.views || 0) - (a.views || 0),
+  newest: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''),
+  followers: (a, b) => followersOf(b) - followersOf(a),
+  name: (a, b) => a.displayName.localeCompare(b.displayName)
+};
+
+// The profile cards for the current filter, sort, and search text
+function exploreListHTML() {
+  const q = exploreQuery.trim().toLowerCase();
+  const sorter = EXPLORE_SORTERS[exploreSort] || EXPLORE_SORTERS.popular;
+  const shown = api.listProfiles()
+    .filter((p) => !p.hidden)
+    .sort(sorter)
+    .filter((p) => exploreFilter === 'all' || p.badges.includes(exploreFilter))
+    .filter((p) => !q || p.username.includes(q) || p.displayName.toLowerCase().includes(q));
+  return shown.map((p) => `
+    <a class="ex-card" href="#/${esc(p.username)}">
+      ${avatarHTML(p, '', 56)}
+      <div><div class="ex-name">${esc(p.displayName)}</div>
+      <div class="ex-handle">@${esc(p.username)}</div>
+      <div class="badges">${badgesHTML(p)}</div></div>
+    </a>`).join('') || '<p class="empty">No profiles match.</p>';
+}
 
 function renderExplore() {
   const site = api.getSite();
   setMeta(`Explore · ${site.name}`, 'Browse public profiles', '');
   const all = api.listProfiles().filter((p) => !p.hidden);
-  const sorters = {
-    popular: (a, b) => (b.views || 0) - (a.views || 0),
-    newest: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''),
-    followers: (a, b) => followersOf(b) - followersOf(a),
-    name: (a, b) => a.displayName.localeCompare(b.displayName)
-  };
-  all.sort(sorters[exploreSort] || sorters.popular);
-  const shown = exploreFilter === 'all' ? all : all.filter((p) => p.badges.includes(exploreFilter));
 
   const chip = (id, label, count, color) => `
     <button type="button" class="chip-filter${exploreFilter === id ? ' on' : ''}" data-filter="${esc(id)}" aria-pressed="${exploreFilter === id}">
@@ -1394,19 +1455,14 @@ function renderExplore() {
           ${chip('all', 'All', all.length)}
           ${api.listBadges().map((b) => chip(b.id, b.label, all.filter((p) => p.badges.includes(b.id)).length, b.color)).join('')}
         </div>
-        <label class="field-label">Sort
-          <select class="field" id="explore-sort">${sortOpts}</select>
-        </label>
+        <div class="explore-controls">
+          <input class="field" type="search" id="explore-search" value="${esc(exploreQuery)}" placeholder="Find a profile by name" aria-label="Find a profile">
+          <label class="field-label">Sort
+            <select class="field" id="explore-sort">${sortOpts}</select>
+          </label>
+        </div>
       </div>
-      <div class="ex-grid">
-        ${shown.map((p) => `
-          <a class="ex-card" href="#/${esc(p.username)}">
-            ${avatarHTML(p, '', 56)}
-            <div><div class="ex-name">${esc(p.displayName)}</div>
-            <div class="ex-handle">@${esc(p.username)}</div>
-            <div class="badges">${badgesHTML(p)}</div></div>
-          </a>`).join('') || '<p class="empty">No profiles match this filter yet.</p>'}
-      </div>
+      <div class="ex-grid" id="ex-grid">${exploreListHTML()}</div>
     </div>`;
 }
 
@@ -3326,6 +3382,12 @@ function onAppClick(e) {
     return;
   }
 
+  const pbToggle = t.closest('[data-pbadge-toggle]');
+  if (pbToggle) {
+    toggleProfileBadge(pbToggle.dataset.u, pbToggle.dataset.pbadgeToggle, pbToggle);
+    return;
+  }
+
   const pwBtn = t.closest('[data-pw-toggle]');
   if (pwBtn) {
     const input = $(pwBtn.dataset.pwToggle);
@@ -3438,6 +3500,11 @@ function onAppField(e) {
     return;
   }
   if (el.id === 'explore-sort' && e.type === 'change') { exploreSort = el.value; renderExplore(); return; }
+  if (el.id === 'explore-search' && e.type === 'input') {
+    exploreQuery = el.value;
+    if ($('ex-grid')) $('ex-grid').innerHTML = exploreListHTML();
+    return;
+  }
   if ((el.id === 'acct-search' && e.type === 'input') || (el.id === 'acct-role' && e.type === 'change')) { renderAccountsList(); return; }
   if (el.id === 'log-search' && e.type === 'input') {
     logQuery = el.value;
