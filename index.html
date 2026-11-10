@@ -2554,7 +2554,6 @@ function renderAuth(mode) {
         <button class="btn ghost full-btn" id="discord-btn" type="button">Continue with Discord</button>
         <p class="sub-note">Discord sign-in is a placeholder until OAuth is set up.</p>
         <p class="auth-foot">No account? <a href="#/signup">Sign up</a></p>
-        ${api.findAccount(ADMIN_USERNAME) ? '' : '<p class="auth-foot">First time here? <a href="#/setup">Set up the chexxk admin account</a></p>'}
       </div>`);
     $('login-id').focus();
     return;
